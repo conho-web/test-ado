@@ -1,0 +1,63 @@
+stages:
+  - build
+  - deploy
+
+workflow:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev"
+
+.build:
+  stage: build
+  variables:
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_HOST: "tcp://docker:2375"
+    API_URL: ""
+    IMAGE: cr.yandex/$REGISTRY_ID/$IMAGE_NAME:$CI_COMMIT_BRANCH
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script:
+    - echo $AUTH_KEY | docker login --username json_key --password-stdin cr.yandex
+  script:
+    - docker build --build-arg VUE_APP_API_URL=${API_URL} -t $IMAGE .
+    - docker push $IMAGE
+  after_script:
+    - docker logout cr.yandex
+
+.deploy:
+  stage: deploy
+  variables:
+    SSH_PRIVATE_KEY: "ssh private key"
+    SERVER_IP: "server ip"
+  before_script:
+    - 'command -v ssh-agent >/dev/null || ( apt-get update -y && apt-get install openssh-client -y )'
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - ssh-keyscan $SERVER_IP >> ~/.ssh/known_hosts
+    - chmod 644 ~/.ssh/known_hosts
+  script:
+    - ssh ubuntu@$SERVER_IP "docker pull cr.yandex/$REGISTRY_ID/$IMAGE_NAME:$CI_COMMIT_BRANCH && bash restart.sh dashboard"
+
+build-dev:
+  stage: build
+  environment:
+    name: stage
+  variables:
+    API_URL: "http://158.160.11.229/api/v1/"
+  extends:
+    - .build
+  only:
+    - dev
+
+deploy-dev:
+  environment:
+    name: stage
+  variables:
+    SSH_PRIVATE_KEY: $SSH_DEVELOP_PRIVATE_KEY
+    SERVER_IP: $DEVELOP_SERVER_IP
+  extends:
+    - .deploy
+  only:
+    - dev
